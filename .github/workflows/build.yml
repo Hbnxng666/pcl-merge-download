@@ -1,0 +1,76 @@
+name: 编译 PCL 合并下载修改版
+
+# 往仓库里推东西、或者在 Actions 页面手动点「Run workflow」，都会触发编译。
+on:
+  push:
+    branches: ['**']
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: windows-latest
+
+    steps:
+      # ---------- 1. 取出本仓库（里面只有改动后的 5 个源文件） ----------
+      - name: 签出本仓库
+        uses: actions/checkout@v4
+
+      # ---------- 2. 取出 PCL 官方源码，锁定到固定版本，保证每次编译结果一致 ----------
+      - name: 签出 PCL 官方源码（锁定版本）
+        uses: actions/checkout@v4
+        with:
+          repository: Hex-Dragon/PCL2
+          ref: 0e0d12fdce6a2804916fb2be60e41144da637c18
+          submodules: recursive
+          path: src
+
+      # ---------- 3. 把改动后的源文件覆盖上去 ----------
+      - name: 覆盖为改动后的源码
+        shell: pwsh
+        run: |
+          Write-Host '将覆盖以下文件：'
+          Get-ChildItem -Path 'patch' -Recurse -File | ForEach-Object {
+            Write-Host ('  ' + $_.FullName.Substring((Get-Location).Path.Length + 1))
+          }
+          Copy-Item -Path 'patch\*' -Destination 'src\' -Recurse -Force
+          Write-Host '覆盖完成。'
+
+      # ---------- 4. 确保 .NET Framework 4.8 目标包存在 ----------
+      - name: 检查 .NET Framework 4.8 目标包
+        shell: pwsh
+        run: |
+          $ref = 'C:\Program Files (x86)\Reference Assemblies\Microsoft\Framework\.NETFramework\v4.8'
+          if (Test-Path $ref) {
+            Write-Host '.NET Framework 4.8 目标包已存在，跳过安装。'
+          } else {
+            Write-Host '未找到 4.8 目标包，正在安装 netfx-4.8-devpack……'
+            choco install netfx-4.8-devpack -y --no-progress
+          }
+
+      # ---------- 5. 编译 ----------
+      - name: 设置 MSBuild
+        uses: microsoft/setup-msbuild@v2
+
+      - name: 还原 NuGet 包
+        shell: pwsh
+        run: msbuild 'src\Plain Craft Launcher 2.sln' /t:Restore /p:Configuration=Release /v:minimal
+
+      - name: 编译
+        shell: pwsh
+        run: msbuild 'src\Plain Craft Launcher 2.sln' /p:Configuration=Release /p:Platform='Any CPU' /m /v:minimal
+
+      # ---------- 6. 确认产物存在 ----------
+      - name: 检查编译产物
+        shell: pwsh
+        run: |
+          $exe = 'src\Plain Craft Launcher 2\bin\Plain Craft Launcher 2.exe'
+          if (-not (Test-Path $exe)) { throw "编译产物不存在：$exe" }
+          Get-Item $exe | Format-List Name, Length, LastWriteTime
+
+      # ---------- 7. 上传成品，供下载 ----------
+      - name: 上传成品
+        uses: actions/upload-artifact@v4
+        with:
+          name: PCL-MergeDownload-Mod
+          path: src/Plain Craft Launcher 2/bin/*.exe
+          if-no-files-found: error
